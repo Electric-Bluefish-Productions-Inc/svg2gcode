@@ -586,6 +586,103 @@ curl -X POST http://external-system:8080/webhook \
    - ReadWritePaths restricted
 4. **Secret Management**: Webhook secrets in config file (not in code)
 
+## Docker Deployment (Alternative)
+
+Phase 4 can be deployed as a Docker container instead of systemd service. This is ideal for environments with containerized infrastructure.
+
+### Docker Entry Point
+
+The daemon includes a file watching mechanism (polling-based) that replaces systemd.path functionality:
+
+```python
+# In svg-to-gcode-daemon.py
+def _watch_directory(self, watch_dir, polling_interval=2):
+    """Poll watch directory for new SVG files every N seconds"""
+    # Detects new .svg/.SVG files and processes them
+    # Configurable via WATCH_INTERVAL environment variable
+```
+
+### Docker Image Build
+
+```bash
+cd /workspace/svg2gcode
+docker build -t svg2gcode:latest .
+```
+
+**Image Details:**
+- Base: python:3.11-slim (~150MB)
+- Includes: Flask, requests dependencies
+- User: Non-root `svg2gcode`
+- Port: 8765 (REST API)
+
+### Docker Compose Deployment
+
+```bash
+# From /raid3/svg_deployment directory
+docker-compose up -d
+docker-compose logs -f svg2gcode
+
+# Test API
+curl http://localhost:8765/health
+curl http://localhost:8765/api/labels
+```
+
+**Configuration via Environment Variables:**
+- `SVG2GCODE_LOG_LEVEL` - Logging level (default: INFO)
+- `ENABLE_FILE_WATCH` - Enable file watching (default: true)
+- `WATCH_INTERVAL` - Polling interval in seconds (default: 2)
+- `SVG2GCODE_DB_PATH` - Database path override
+- `SVG2GCODE_ARCHIVE_BASE_PATH` - Archive path override
+
+### Volume Mounts
+
+**Required Mounts:**
+```yaml
+volumes:
+  - ./config/config.json:/etc/svg-to-gcode/config.json:ro
+  - svg2gcode-db:/var/lib/svg-to-gcode               # Database
+  - svg2gcode-logs:/var/log/svg-to-gcode             # Logs
+  - /raid1/gcode:/mnt/raid1/gcode:rw                 # Watch directory
+  - /raid1/label-archive:/mnt/raid1/label-archive:rw # Archives
+```
+
+### Docker vs. Systemd Comparison
+
+| Feature | Systemd | Docker |
+|---------|---------|--------|
+| **File Watching** | inotify (systemd.path) | Polling (2s default) |
+| **Latency** | <100ms | ~2-5s |
+| **Resource Usage** | Minimal | ~50-100MB memory |
+| **Deployment** | Host system | Container |
+| **Scaling** | Single instance | Multiple replicas |
+| **Volume Mounts** | Direct filesystem | Docker volumes + bind mounts |
+
+### Deployment Directory Structure
+
+```
+/raid3/svg_deployment/
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+├── .dockerignore
+├── config/
+│   └── config.json
+├── data/
+│   ├── db/                 # Docker volume
+│   └── logs/               # Docker volume
+└── [Python modules]
+```
+
+### Health Checks
+
+Docker health check endpoint:
+```bash
+curl http://localhost:8765/health
+# Returns: {"status": "healthy", "timestamp": "2026-08-17T..."}
+```
+
+Container automatically restarts if health check fails (3 retries, 30s interval).
+
 ## Future Enhancements
 
 - PostgreSQL support for larger scale

@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  svg2gcode:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: svg2gcode-daemon
+
+    # Environment configuration (overrides config.json values)
+    environment:
+      - SVG2GCODE_LOG_LEVEL=INFO
+      - ENABLE_FILE_WATCH=true
+      - WATCH_INTERVAL=2
+
+    # Port mapping
+    ports:
+      - "8765:8765"
+
+    # Volume mounts
+    volumes:
+      # Application configuration (read-only)
+      - ./config/config.json:/etc/svg-to-gcode/config.json:ro
+
+      # Persistent data volumes
+      - svg2gcode-db:/var/lib/svg-to-gcode
+      - svg2gcode-logs:/var/log/svg-to-gcode
+
+      # Watch and archive directories (bind mounts to RAID storage)
+      - /raid1/gcode:/mnt/raid1/gcode:rw
+      - /raid1/label-archive:/mnt/raid1/label-archive:rw
+
+    # Resource limits (matching systemd MemoryMax=512M, CPUQuota=50%)
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Health check endpoint
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+
+    # Network
+    networks:
+      - svg2gcode-network
+
+# Named volumes for persistent data
+volumes:
+  svg2gcode-db:
+    driver: local
+  svg2gcode-logs:
+    driver: local
+
+# Custom network
+networks:
+  svg2gcode-network:
+    driver: bridge

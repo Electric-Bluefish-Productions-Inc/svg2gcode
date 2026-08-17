@@ -5,6 +5,21 @@
 **Server**: _______________
 **Environment**: [ ] Fresh Install  [ ] Upgrade from Phase 1-3
 
+## Deployment Method Selection (Required)
+
+Choose your deployment approach:
+
+- [ ] **Systemd on Host** - Deploy as systemd service on host system
+  - Uses: install-phase4.sh, systemd units
+  - Best for: Traditional Linux servers
+  
+- [ ] **Docker Container** - Deploy as Docker container
+  - Uses: docker-compose.yml, Dockerfile
+  - Best for: Containerized infrastructure
+  - Location: /raid3/svg_deployment/
+
+**Note:** Both methods can coexist. This checklist covers both paths separately below.
+
 ---
 
 ## PHASE 1: PRE-INSTALLATION ASSESSMENT & PREREQUISITES
@@ -655,13 +670,245 @@ sudo /usr/local/bin/svg2gcode-rollback.sh <BACKUP_PATH>
 
 ---
 
+## DOCKER DEPLOYMENT (If Using Docker Option)
+
+**Only complete if deploying to Docker. Skip if using Systemd on host.**
+
+### Docker Pre-deployment Checks
+**Estimated Time: 10 minutes**
+
+- [ ] Docker installed: `docker --version`
+- [ ] Docker daemon running: `docker ps`
+- [ ] docker-compose installed: `docker-compose --version`
+- [ ] Sufficient disk space: `docker system df`
+- [ ] `/raid3/svg_deployment` directory created
+- [ ] `/raid1/gcode` mount point exists
+- [ ] `/raid1/label-archive` mount point exists
+
+### Docker Image Build
+**Estimated Time: 5 minutes**
+
+```bash
+cd /workspace/svg2gcode
+docker build -t svg2gcode:latest .
+```
+
+- [ ] Docker image builds without errors
+- [ ] Image size reasonable: `docker images svg2gcode` (< 200MB)
+- [ ] Image tagged as `svg2gcode:latest`
+- [ ] Base image verified: python:3.11-slim
+
+### Docker Compose Setup
+**Estimated Time: 5 minutes**
+
+- [ ] `docker-compose.yml` copied to `/raid3/svg_deployment/`
+- [ ] `Dockerfile` copied to `/raid3/svg_deployment/`
+- [ ] `requirements.txt` copied to `/raid3/svg_deployment/`
+- [ ] `.dockerignore` copied to `/raid3/svg_deployment/`
+- [ ] All Python modules copied to `/raid3/svg_deployment/`
+- [ ] `config/config.json` created in `/raid3/svg_deployment/config/`
+
+### Docker Container Startup
+**Estimated Time: 10 minutes**
+
+```bash
+cd /raid3/svg_deployment
+docker-compose build
+docker-compose up -d
+docker-compose ps
+```
+
+- [ ] Container builds successfully
+- [ ] Container starts without errors
+- [ ] Container status: `Up` (not `Exited` or `Restarting`)
+- [ ] Port 8765 accessible: `curl http://localhost:8765/health`
+- [ ] Health check passing: `docker-compose ps` shows healthy status
+
+### Docker API Testing
+**Estimated Time: 10 minutes**
+
+```bash
+# Test health endpoint
+curl -s http://localhost:8765/health | python3 -m json.tool
+
+# Test label endpoints
+curl -s http://localhost:8765/api/labels | python3 -m json.tool
+
+# Test archive endpoints
+curl -s http://localhost:8765/api/archive | python3 -m json.tool
+
+# Check logs
+docker-compose logs svg2gcode | head -50
+```
+
+- [ ] Health endpoint responds with status "healthy"
+- [ ] `/api/labels` returns empty array or list of labels
+- [ ] `/api/archive` returns archive statistics
+- [ ] Container logs show no errors
+- [ ] "File watcher thread started" message in logs
+
+### Docker Volume Persistence
+**Estimated Time: 5 minutes**
+
+```bash
+# Verify volumes created
+docker volume ls | grep svg2gcode
+
+# Check volume mounts
+docker-compose exec svg2gcode ls -la /var/lib/svg-to-gcode
+docker-compose exec svg2gcode ls -la /var/log/svg-to-gcode
+docker-compose exec svg2gcode ls -la /mnt/raid1/gcode
+```
+
+- [ ] `svg2gcode-db` volume exists
+- [ ] `svg2gcode-logs` volume exists
+- [ ] Database file accessible in container
+- [ ] Log directory accessible in container
+- [ ] RAID mounts visible inside container
+
+### Docker File Watching Test
+**Estimated Time: 10 minutes**
+
+```bash
+# Create test SVG file
+echo '<svg><circle cx="50" cy="50" r="40"/></svg>' > /raid1/gcode/test.svg
+
+# Check logs for detection
+docker-compose logs svg2gcode | grep "Detected new SVG"
+
+# Verify via API
+curl -s http://localhost:8765/api/labels/stats | python3 -m json.tool
+```
+
+- [ ] Test SVG file detected by polling watcher
+- [ ] "Detected new SVG" message in logs
+- [ ] No errors in container logs
+- [ ] File detection latency acceptable (< 10 seconds)
+
+### Docker Resource Limits
+**Estimated Time: 5 minutes**
+
+```bash
+# Check resource limits
+docker stats svg2gcode-daemon --no-stream
+
+# Monitor for extended period
+watch -n 1 'docker stats svg2gcode-daemon --no-stream'
+```
+
+- [ ] Memory usage < 512M limit
+- [ ] CPU usage < 50% quota
+- [ ] Container stable over 5 minute monitoring period
+- [ ] No memory leaks observed
+
+### Docker Container Restart Test
+**Estimated Time: 10 minutes**
+
+```bash
+# Restart container
+docker-compose restart svg2gcode
+
+# Verify restart
+docker-compose ps
+
+# Test API after restart
+curl http://localhost:8765/health
+
+# Verify database persistence
+docker-compose exec svg2gcode python3 << 'EOF'
+import sys
+sys.path.insert(0, '/app')
+from label_history import LabelHistoryDB
+db = LabelHistoryDB('/var/lib/svg-to-gcode/labels.db')
+print(f"Labels: {db.get_statistics()['total_labels']}")
+db.close()
+EOF
+```
+
+- [ ] Container restarts cleanly
+- [ ] Health endpoint accessible after restart
+- [ ] Database data persists across restart
+- [ ] All volumes remounted correctly
+
+### Docker Compose Down/Up Cycle
+**Estimated Time: 5 minutes**
+
+```bash
+docker-compose down
+docker-compose up -d
+docker-compose ps
+```
+
+- [ ] Container stops gracefully (`docker-compose down`)
+- [ ] Container starts successfully (`docker-compose up`)
+- [ ] No orphaned containers remain
+- [ ] Clean startup from persistent volumes
+
+### Docker Integration with Host
+**Estimated Time: 5 minutes**
+
+```bash
+# Check container in main docker ps
+docker ps | grep svg2gcode
+
+# Verify network connectivity
+docker ps --format="table {{.Names}}\t{{.Ports}}" | grep svg2gcode
+
+# Test from another container (if applicable)
+docker run --rm --network svg2gcode-network curlimages/curl http://svg2gcode:8765/health
+```
+
+- [ ] Container appears in `docker ps` output
+- [ ] Port 8765 properly mapped
+- [ ] Container accessible via name in custom network
+- [ ] Integration with other Docker services possible
+
+### Docker Logging
+**Estimated Time: 5 minutes**
+
+```bash
+# View logs
+docker-compose logs -f svg2gcode --tail 50
+
+# Check log driver
+docker inspect svg2gcode-daemon | grep -A 5 LogDriver
+
+# Verify log rotation
+docker-compose exec svg2gcode ls -la /var/log/svg-to-gcode/
+```
+
+- [ ] Container logs output to stdout/stderr
+- [ ] Log driver configured as json-file
+- [ ] Log rotation configured (10m max size, 3 files)
+- [ ] Logs accessible via `docker-compose logs`
+
+### Docker Cleanup
+**Estimated Time: 5 minutes**
+
+```bash
+# Prune unused images
+docker image prune -f
+
+# Check system usage
+docker system df
+```
+
+- [ ] Build cache cleaned up
+- [ ] Unused images removed
+- [ ] System disk space reclaimed
+- [ ] Only necessary images retained
+
+---
+
 ## FINAL SIGN-OFF
 
 ### Deployment Summary
 - **Start Time**: _______________________
 - **End Time**: _______________________
 - **Total Duration**: _________ minutes
-- **Planned Time**: 150-180 minutes
+- **Planned Time (Systemd)**: 150-180 minutes
+- **Planned Time (Docker)**: 120-150 minutes
+- **Deployment Method Used**: [ ] Systemd  [ ] Docker  [ ] Both
 - **Status**: [ ] On Schedule  [ ] Ahead  [ ] Behind
 
 ### Issues and Resolutions

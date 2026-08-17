@@ -8,7 +8,10 @@ tracks label history, archives completed jobs, and sends webhook notifications.
 
 import json
 import logging
+import os
 import sys
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
@@ -46,12 +49,26 @@ class SVGToGcodeDaemon:
         self._setup_routes()
 
     def _load_config(self) -> Dict:
-        """Load configuration from JSON file."""
+        """Load configuration from JSON file with environment variable overrides."""
         if not self.config_path.exists():
             raise FileNotFoundError(f"Config file not found: {self.config_path}")
 
         with open(self.config_path) as f:
-            return json.load(f)
+            config = json.load(f)
+
+        # Environment variable overrides for Docker compatibility
+        if os.getenv('SVG2GCODE_LOG_LEVEL'):
+            config.setdefault('daemon', {})['log_level'] = os.getenv('SVG2GCODE_LOG_LEVEL')
+        if os.getenv('SVG2GCODE_API_PORT'):
+            config.setdefault('daemon', {})['api_port'] = int(os.getenv('SVG2GCODE_API_PORT'))
+        if os.getenv('SVG2GCODE_WATCH_DIR'):
+            config.setdefault('daemon', {})['watch_dir'] = os.getenv('SVG2GCODE_WATCH_DIR')
+        if os.getenv('SVG2GCODE_DB_PATH'):
+            config.setdefault('label_history', {})['db_path'] = os.getenv('SVG2GCODE_DB_PATH')
+        if os.getenv('SVG2GCODE_ARCHIVE_BASE_PATH'):
+            config.setdefault('label_archive', {})['base_path'] = os.getenv('SVG2GCODE_ARCHIVE_BASE_PATH')
+
+        return config
 
     def _setup_logging(self) -> None:
         """Configure logging."""
@@ -364,6 +381,48 @@ class SVGToGcodeDaemon:
                 return "", 204
             return jsonify({"error": "Webhook not found"}), 404
 
+    def _watch_directory(self, watch_dir: str, polling_interval: int = 2) -> None:
+        """
+        Poll watch directory for new SVG files (Docker-native alternative to systemd.path).
+
+        Args:
+            watch_dir: Directory to watch for SVG files
+            polling_interval: Seconds between directory checks
+        """
+        seen_files = set()
+        self.logger.info(f"Starting directory watcher on {watch_dir} with {polling_interval}s interval")
+
+        while True:
+            try:
+                if os.path.exists(watch_dir):
+                    current_files = {
+                        f for f in os.listdir(watch_dir)
+                        if f.endswith(('.svg', '.SVG'))
+                    }
+                    new_files = current_files - seen_files
+                    for filename in new_files:
+                        self.logger.info(f"Detected new SVG file: {filename}")
+                        self._process_svg(os.path.join(watch_dir, filename))
+                    seen_files = current_files
+                time.sleep(polling_interval)
+            except Exception as e:
+                self.logger.error(f"Watch directory error: {e}")
+                time.sleep(polling_interval)
+
+    def _process_svg(self, filepath: str) -> None:
+        """
+        Process detected SVG file.
+
+        Note: Phase 4 focuses on label tracking and archival.
+        SVG conversion is handled by Phase 1-3 components.
+
+        Args:
+            filepath: Path to SVG file detected
+        """
+        self.logger.info(f"Processing SVG file: {filepath}")
+        # Placeholder for SVG processing logic
+        # Real conversion logic is implemented in Phase 1-3 (Rust-based)
+
     def run(self, host: str = "0.0.0.0", port: Optional[int] = None) -> None:
         """
         Start the daemon.
@@ -374,6 +433,18 @@ class SVGToGcodeDaemon:
         """
         if port is None:
             port = self.config.get("daemon", {}).get("api_port", 8765)
+
+        # Start file watcher in background thread (if enabled)
+        if os.getenv('ENABLE_FILE_WATCH', 'true').lower() == 'true':
+            watch_dir = self.config.get('daemon', {}).get('watch_dir', '/mnt/raid1/gcode')
+            watch_interval = int(os.getenv('WATCH_INTERVAL', '2'))
+            watcher_thread = threading.Thread(
+                target=self._watch_directory,
+                args=(watch_dir, watch_interval),
+                daemon=True
+            )
+            watcher_thread.start()
+            self.logger.info(f"File watcher thread started")
 
         self.logger.info(f"Starting SVG-to-GCode daemon on {host}:{port}")
         self.app.run(host=host, port=port, debug=False)
