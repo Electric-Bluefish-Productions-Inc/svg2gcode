@@ -63,7 +63,9 @@ class LabelHistoryDB:
         """Initialize database connection and create schema if needed."""
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.db_path))
+        # check_same_thread=False allows SQLite to be used across multiple threads
+        # (safe when using a single connection object, as we do here)
+        self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._create_schema()
 

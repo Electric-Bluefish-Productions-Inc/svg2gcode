@@ -19,8 +19,8 @@ RUN useradd -r -s /bin/false svg2gcode && \
     chown -R svg2gcode:svg2gcode /app
 
 # Create required directories
-RUN mkdir -p /var/lib/svg-to-gcode /var/log/svg-to-gcode && \
-    chown -R svg2gcode:svg2gcode /var/lib/svg-to-gcode /var/log/svg-to-gcode
+RUN mkdir -p /var/lib/svg-to-gcode /var/log/svg-to-gcode /etc/svg-to-gcode && \
+    chown -R svg2gcode:svg2gcode /var/lib/svg-to-gcode /var/log/svg-to-gcode /etc/svg-to-gcode
 
 USER svg2gcode
 
