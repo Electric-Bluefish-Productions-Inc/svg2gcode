@@ -27,44 +27,44 @@ echo "[$(date +'%Y-%m-%d %H:%M:%S')] Watch directory: $WATCH_DIR"
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Poll interval: ${POLL_INTERVAL}s"
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] Settings: feedrate=${FEEDRATE}, tolerance=${TOLERANCE}, dpi=${DPI}"
 
-# Track processed files (simple space-separated list for sh compatibility)
-processed_files=""
+# Track processed files using a marker file
+marker_file="/tmp/svg2gcode_processed.txt"
+touch "$marker_file"
 
 while true; do
-    # Find all SVG files in watch directory
-    find "$WATCH_DIR" -maxdepth 1 \( -name "*.svg" -o -name "*.SVG" \) | while read -r svg_file; do
+    # Find all SVG files in watch directory (exclude ._ files)
+    find "$WATCH_DIR" -maxdepth 1 -type f \( -name "*.svg" -o -name "*.SVG" \) ! -name "._*" | sort | while read -r svg_file; do
         # Skip if file doesn't exist
         [ -f "$svg_file" ] || continue
 
-        # Skip if already processed (check if in processed_files list)
-        case " $processed_files " in
-            *" $svg_file "*)
-                continue
-                ;;
+        # Skip if already in marker file
+        if grep -q "^${svg_file}$" "$marker_file" 2>/dev/null; then
+            continue
+        fi
+
+        # Skip macOS temp files
+        case "$svg_file" in
+            *"._"*) continue ;;
         esac
 
-        # Skip if file is locked (still being written)
-        if ! lsof "$svg_file" 2>/dev/null | grep -q . 2>/dev/null; then
-            # File exists and is not open - mark as processed
-            processed_files="$processed_files $svg_file"
+        filename=$(basename "$svg_file")
+        gcode_file="${svg_file%.*}.gcode"
+        gcode_filename=$(basename "$gcode_file")
 
-            filename=$(basename "$svg_file")
-            gcode_file="${svg_file%.*}.gcode"
-            gcode_filename=$(basename "$gcode_file")
+        echo "[$(date +'%Y-%m-%d %H:%M:%S')] Converting: $filename"
 
-            echo "[$(date +'%Y-%m-%d %H:%M:%S')] Converting: $filename"
+        # Call svg2gcode-cli with configured parameters
+        if svg2gcode-cli "$svg_file" \
+            --feedrate "$FEEDRATE" \
+            --tolerance "$TOLERANCE" \
+            --dpi "$DPI" \
+            -o "$gcode_file"; then
 
-            # Call svg2gcode-cli with configured parameters
-            if svg2gcode-cli "$svg_file" \
-                --feedrate "$FEEDRATE" \
-                --tolerance "$TOLERANCE" \
-                --dpi "$DPI" \
-                -o "$gcode_file" 2>&1; then
-
-                echo "[$(date +'%Y-%m-%d %H:%M:%S')] ✓ Generated: $gcode_filename"
-            else
-                echo "[$(date +'%Y-%m-%d %H:%M:%S')] ✗ Failed to convert: $filename" >&2
-            fi
+            echo "[$(date +'%Y-%m-%d %H:%M:%S')] ✓ Generated: $gcode_filename"
+            # Mark file as processed
+            echo "$svg_file" >> "$marker_file"
+        else
+            echo "[$(date +'%Y-%m-%d %H:%M:%S')] ✗ Failed to convert: $filename" >&2
         fi
     done
 
