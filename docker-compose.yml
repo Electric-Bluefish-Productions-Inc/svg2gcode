@@ -2,11 +2,65 @@
 version: '3.8'
 
 services:
-  svg2gcode:
+  # Phase 1-3: SVG to G-code Converter
+  # Watches /mnt/raid1/gcode for SVG files and converts them to G-code
+  svg2gcode-converter:
+    image: svg2gcode-converter:latest
+    container_name: svg2gcode-converter
+
+    # Environment configuration
+    environment:
+      - FEEDRATE=1000
+      - TOLERANCE=0.5
+      - DPI=96
+      - LOG_LEVEL=INFO
+
+    # Volume mounts
+    volumes:
+      # Shared watch directory (read-write for input SVGs and output G-code)
+      - /mnt/raid1/gcode:/data:rw
+
+      # Optional: Config file for conversion settings
+      - ./config/svg2gcode-settings.json:/etc/svg2gcode/settings.json:ro
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+
+    # Network
+    networks:
+      - svg2gcode-network
+
+  # Phase 4: Label Tracking, History & Webhooks
+  # REST API for managing labels, archives, and webhook notifications
+  svg2gcode-daemon:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: svg2gcode-daemon
+
+    depends_on:
+      - svg2gcode-converter
 
     # Environment configuration (overrides config.json values)
     environment:
@@ -28,8 +82,8 @@ services:
       - svg2gcode-logs:/var/log/svg-to-gcode
 
       # Watch and archive directories (bind mounts to RAID storage)
-      - /raid1/gcode:/mnt/raid1/gcode:rw
-      - /raid1/label-archive:/mnt/raid1/label-archive:rw
+      - /mnt/raid1/gcode:/mnt/raid1/gcode:rw
+      - /mnt/raid1/label-archive:/mnt/raid1/label-archive:rw
 
     # Resource limits (matching systemd MemoryMax=512M, CPUQuota=50%)
     deploy:
@@ -74,7 +128,7 @@ volumes:
   svg2gcode-logs:
     driver: local
 
-# Custom network
+# Custom network (allows service-to-service communication)
 networks:
   svg2gcode-network:
     driver: bridge

@@ -112,7 +112,7 @@ fn extract_layer_from_group(group: roxmltree::Node) -> Option<layer_metadata::La
     })
 }
 
-fn parse_css_property(style: &str, prop_name: &str) -> Option<&str> {
+fn parse_css_property<'a>(style: &'a str, prop_name: &str) -> Option<&'a str> {
     style.split(';').find_map(|decl| {
         let (k, v) = decl.split_once(':')?;
         (k.trim() == prop_name).then(|| v.trim())
